@@ -32,6 +32,8 @@ const paymentUpdateSchema = z.object({
   amount: z.coerce.number().optional(),
 })
 
+const paymentsReplaceSchema = z.array(paymentSchema)
+
 const serializeDeal = (deal: any) => ({
   ...deal,
   payments: deal.payments?.map((p: any) => ({
@@ -132,6 +134,30 @@ app.delete('/payments/:id', async (req, res) => {
   if (Number.isNaN(id)) return res.status(400).json({ error: 'Invalid id' })
   await prisma.payment.delete({ where: { id } })
   res.status(204).send()
+})
+
+app.put('/deals/:id/payments', async (req, res) => {
+  const dealId = Number(req.params.id)
+  if (Number.isNaN(dealId)) return res.status(400).json({ error: 'Invalid id' })
+
+  const parsed = paymentsReplaceSchema.safeParse(req.body)
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() })
+  }
+
+  await prisma.$transaction([
+    prisma.payment.deleteMany({ where: { dealId } }),
+    prisma.payment.createMany({
+      data: parsed.data.map((p) => ({
+        label: p.label,
+        date: p.date,
+        amount: p.amount,
+        dealId,
+      })),
+    }),
+  ])
+
+  return res.status(204).send()
 })
 
 app.get('/forecast', async (req, res) => {

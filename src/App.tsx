@@ -12,8 +12,17 @@ type Payment = {
 type Deal = {
   id: number
   client: string
-  stage: 'Prospecção' | 'Conversa' | 'Proposta' | 'Fechado'
+  stage: Stage
   payments: Payment[]
+}
+
+type Stage = 'PROSPECCAO' | 'CONVERSA' | 'PROPOSTA' | 'FECHADO'
+
+const stageLabels: Record<Stage, string> = {
+  PROSPECCAO: 'Prospecção',
+  CONVERSA: 'Conversa',
+  PROPOSTA: 'Proposta',
+  FECHADO: 'Fechado',
 }
 
 const currency = (value: number) =>
@@ -21,68 +30,86 @@ const currency = (value: number) =>
     value,
   )
 
-const mockDeals: Deal[] = [
-  {
-    id: 1,
-    client: 'Cliente Atlas',
-    stage: 'Prospecção',
-    payments: [
-      { id: 11, label: 'Sinal', date: '2025-01-10', amount: 5000 },
-      { id: 12, label: 'Entrega do Design', date: '2025-02-05', amount: 12000 },
-    ],
-  },
-  {
-    id: 2,
-    client: 'Cliente Boreal',
-    stage: 'Conversa',
-    payments: [
-      { id: 21, label: 'Descoberta', date: '2025-01-22', amount: 3500 },
-      { id: 22, label: 'Entrega Final', date: '2025-03-15', amount: 18500 },
-    ],
-  },
-  {
-    id: 3,
-    client: 'Cliente Croma',
-    stage: 'Proposta',
-    payments: [
-      { id: 31, label: 'Entrada', date: '2024-12-18', amount: 8000 },
-      { id: 32, label: 'Go-live', date: '2025-02-28', amount: 22000 },
-    ],
-  },
-  {
-    id: 4,
-    client: 'Cliente Delta',
-    stage: 'Fechado',
-    payments: [
-      { id: 41, label: 'Sinal', date: '2024-11-10', amount: 7000 },
-      { id: 42, label: 'Sprint 1', date: '2024-12-10', amount: 14000 },
-      { id: 43, label: 'Entrega Final', date: '2025-01-20', amount: 18000 },
-    ],
-  },
-]
-
-const columns: Deal['stage'][] = ['Prospecção', 'Conversa', 'Proposta', 'Fechado']
+const columns: Stage[] = ['PROSPECCAO', 'CONVERSA', 'PROPOSTA', 'FECHADO']
 
 type MonthEntry = {
   key: string
   label: string
   closed: number
   open: number
-  items: { deal: string; label: string; amount: number; stage: Deal['stage']; date: string }[]
+  items: { deal: string; label: string; amount: number; stage: Stage; date: string }[]
 }
 
+type ForecastViewMode = 'custom' | 'semester' | 'year'
+
+const API_URL = 'http://localhost:4000'
+
 function App() {
-  const [deals, setDeals] = useState<Deal[]>(mockDeals)
+  const [deals, setDeals] = useState<Deal[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
   const [paymentsDraft, setPaymentsDraft] = useState<Payment[]>([])
+  const [dealClientDraft, setDealClientDraft] = useState('')
+  const [dealStageDraft, setDealStageDraft] = useState<Stage>('PROSPECCAO')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const [forecastMode, setForecastMode] = useState<ForecastViewMode>('custom')
+  const [customFrom, setCustomFrom] = useState<string>('')
+  const [customTo, setCustomTo] = useState<string>('')
+  const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear())
+  const [semesterFilter, setSemesterFilter] = useState<'1' | '2'>('1')
+
+  const [isSavingDeal, setIsSavingDeal] = useState(false)
 
   const selectedDeal = deals.find((deal) => deal.id === selectedId) ?? null
 
   useEffect(() => {
-    if (selectedDeal) {
-      setPaymentsDraft(selectedDeal.payments.map((p) => ({ ...p })))
+    const fetchDeals = async () => {
+      try {
+        setLoading(true)
+        setError(null)
+        const res = await fetch(`${API_URL}/deals`)
+        if (!res.ok) {
+          throw new Error('Erro ao carregar clientes')
+        }
+        const data: Array<{
+          id: number
+          client: string
+          stage: Stage
+          payments: { id: number; label: string; date: string; amount: number }[]
+        }> = await res.json()
+        setDeals(
+          data.map((deal) => ({
+            ...deal,
+            payments: deal.payments.map((p) => ({
+              ...p,
+              amount: Number(p.amount),
+            })),
+          })),
+        )
+      } catch (e) {
+        console.error(e)
+        setError('Não foi possível carregar os clientes. Verifique se a API está rodando.')
+      } finally {
+        setLoading(false)
+      }
     }
-  }, [selectedDeal])
+
+    fetchDeals()
+  }, [])
+
+  useEffect(() => {
+    if (selectedDeal && !isCreating) {
+      setPaymentsDraft(selectedDeal.payments.map((p) => ({ ...p })))
+      setDealClientDraft(selectedDeal.client)
+      setDealStageDraft(selectedDeal.stage)
+    } else if (isCreating) {
+      setPaymentsDraft([])
+      setDealClientDraft('')
+      setDealStageDraft('PROSPECCAO')
+    }
+  }, [selectedDeal, isCreating])
 
   const totalDraft = paymentsDraft.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
 
@@ -111,14 +138,101 @@ function App() {
     setPaymentsDraft((prev) => prev.filter((payment) => payment.id !== id))
   }
 
-  const savePayments = () => {
-    if (!selectedDeal) return
-    setDeals((prev) =>
-      prev.map((deal) =>
-        deal.id === selectedDeal.id ? { ...deal, payments: paymentsDraft } : deal,
-      ),
-    )
+  const reloadDeals = async () => {
+    try {
+      const res = await fetch(`${API_URL}/deals`)
+      if (!res.ok) return
+      const data: Deal[] = await res.json()
+      setDeals(
+        data.map((deal) => ({
+          ...deal,
+          payments: deal.payments.map((p) => ({
+            ...p,
+            amount: Number(p.amount),
+          })),
+        })),
+      )
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const closeModal = () => {
     setSelectedId(null)
+    setIsCreating(false)
+    setPaymentsDraft([])
+  }
+
+  const saveDealAndPayments = async () => {
+    if (!dealClientDraft.trim()) return
+    setIsSavingDeal(true)
+    try {
+      if (isCreating) {
+        await fetch(`${API_URL}/deals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client: dealClientDraft.trim(),
+            stage: dealStageDraft,
+            payments: paymentsDraft.map((p) => ({
+              label: p.label,
+              date: p.date,
+              amount: p.amount,
+            })),
+          }),
+        })
+      } else if (selectedDeal) {
+        await fetch(`${API_URL}/deals/${selectedDeal.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client: dealClientDraft.trim(),
+            stage: dealStageDraft,
+          }),
+        })
+
+        await fetch(`${API_URL}/deals/${selectedDeal.id}/payments`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            paymentsDraft.map((p) => ({
+              label: p.label,
+              date: p.date,
+              amount: p.amount,
+            })),
+          ),
+        })
+      }
+      await reloadDeals()
+      closeModal()
+    } catch (e) {
+      console.error(e)
+      alert('Erro ao salvar o cliente. Verifique a API.')
+    } finally {
+      setIsSavingDeal(false)
+    }
+  }
+
+  const deleteDeal = async () => {
+    if (!selectedDeal || isCreating) {
+      closeModal()
+      return
+    }
+    const confirmDelete = window.confirm(
+      `Tem certeza que deseja excluir o cliente "${selectedDeal.client}"?`,
+    )
+    if (!confirmDelete) return
+
+    try {
+      await fetch(`${API_URL}/deals/${selectedDeal.id}`, {
+        method: 'DELETE',
+      })
+      await reloadDeals()
+      closeModal()
+    } catch (e) {
+      console.error(e)
+      alert('Erro ao excluir o cliente.')
+    }
   }
 
   const forecast = useMemo<MonthEntry[]>(() => {
@@ -141,7 +255,7 @@ function App() {
         }
 
         const entry = months.get(key)!
-        const bucket = deal.stage === 'Fechado' ? 'closed' : 'open'
+        const bucket = deal.stage === 'FECHADO' ? 'closed' : 'open'
         entry[bucket] += payment.amount
         entry.items.push({
           deal: deal.client,
@@ -155,6 +269,51 @@ function App() {
 
     return Array.from(months.values()).sort((a, b) => (a.key < b.key ? -1 : 1))
   }, [deals])
+
+  const forecastYears = useMemo(
+    () =>
+      Array.from(new Set(forecast.map((m) => m.key.slice(0, 4))))
+        .map((y) => Number(y))
+        .sort((a, b) => a - b),
+    [forecast],
+  )
+
+  useEffect(() => {
+    if (forecast.length > 0 && !customFrom && !customTo) {
+      const first = forecast[0]?.key
+      const last = forecast[forecast.length - 1]?.key
+      if (first && last) {
+        setCustomFrom(first)
+        setCustomTo(last)
+      }
+      if (forecastYears.length > 0) {
+        setYearFilter(forecastYears[0])
+      }
+    }
+  }, [forecast, customFrom, customTo, forecastYears])
+
+  const filteredForecast = useMemo(() => {
+    if (forecastMode === 'custom') {
+      return forecast.filter(
+        (m) =>
+          (!customFrom || m.key >= customFrom) && (!customTo || m.key <= customTo),
+      )
+    }
+
+    if (forecastMode === 'year') {
+      const yearStr = String(yearFilter)
+      return forecast.filter((m) => m.key.startsWith(`${yearStr}-`))
+    }
+
+    if (forecastMode === 'semester') {
+      const yearStr = String(yearFilter)
+      const from = semesterFilter === '1' ? `${yearStr}-01` : `${yearStr}-07`
+      const to = semesterFilter === '1' ? `${yearStr}-06` : `${yearStr}-12`
+      return forecast.filter((m) => m.key >= from && m.key <= to)
+    }
+
+    return forecast
+  }, [forecast, forecastMode, customFrom, customTo, yearFilter, semesterFilter])
 
   const dealTotal = (deal: Deal) =>
     deal.payments.reduce((sum, payment) => sum + payment.amount, 0)
@@ -194,6 +353,27 @@ function App() {
               </p>
             </div>
           </div>
+          <div className="mb-3 flex items-center justify-between">
+            <button
+              onClick={() => {
+                setIsCreating(true)
+                setSelectedId(null)
+                setDealClientDraft('')
+                setDealStageDraft('PROSPECCAO')
+                setPaymentsDraft([])
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400 hover:bg-slate-50"
+            >
+              <Plus size={14} />
+              Novo cliente
+            </button>
+            {loading && (
+              <span className="text-xs text-slate-500">Carregando clientes...</span>
+            )}
+            {!loading && error && (
+              <span className="text-xs text-rose-600">{error}</span>
+            )}
+          </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {columns.map((column) => (
               <div
@@ -201,7 +381,9 @@ function App() {
                 className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
               >
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-800">{column}</span>
+                  <span className="text-sm font-semibold text-slate-800">
+                    {stageLabels[column]}
+                  </span>
                   <span className="text-xs text-slate-500">
                     {
                       deals.filter((deal) => deal.stage === column)
@@ -254,8 +436,107 @@ function App() {
               </p>
             </div>
           </div>
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+            <span className="font-semibold text-slate-700">Período:</span>
+            <div className="flex gap-1 rounded-full bg-slate-100 p-1 text-[11px]">
+              <button
+                onClick={() => setForecastMode('custom')}
+                className={`rounded-full px-3 py-1 ${
+                  forecastMode === 'custom'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-700'
+                }`}
+              >
+                Livre
+              </button>
+              <button
+                onClick={() => setForecastMode('semester')}
+                className={`rounded-full px-3 py-1 ${
+                  forecastMode === 'semester'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-700'
+                }`}
+              >
+                Semestre
+              </button>
+              <button
+                onClick={() => setForecastMode('year')}
+                className={`rounded-full px-3 py-1 ${
+                  forecastMode === 'year'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-700'
+                }`}
+              >
+                Anual
+              </button>
+            </div>
+
+            {forecastMode === 'custom' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span>De</span>
+                <input
+                  type="month"
+                  value={customFrom}
+                  onChange={(e) => setCustomFrom(e.target.value)}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                />
+                <span>até</span>
+                <input
+                  type="month"
+                  value={customTo}
+                  onChange={(e) => setCustomTo(e.target.value)}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                />
+              </div>
+            )}
+
+            {forecastMode === 'semester' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Ano</span>
+                <select
+                  value={yearFilter}
+                  onChange={(e) => setYearFilter(Number(e.target.value))}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                >
+                  {forecastYears.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={semesterFilter}
+                  onChange={(e) =>
+                    setSemesterFilter(e.target.value === '1' ? '1' : '2')
+                  }
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                >
+                  <option value="1">1º semestre</option>
+                  <option value="2">2º semestre</option>
+                </select>
+              </div>
+            )}
+
+            {forecastMode === 'year' && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Ano</span>
+                <select
+                  value={yearFilter}
+                  onChange={(e) => setYearFilter(Number(e.target.value))}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                >
+                  {forecastYears.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
           <div className="space-y-3">
-            {forecast.map((month) => (
+            {filteredForecast.map((month) => (
               <div
                 key={month.key}
                 className="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm"
@@ -314,7 +595,7 @@ function App() {
         </section>
       </main>
 
-      {selectedDeal && (
+      {(selectedDeal || isCreating) && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 px-4 py-6">
           <div className="relative w-full max-w-3xl rounded-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
@@ -323,14 +604,14 @@ function App() {
                   Work Packages
                 </p>
                 <h2 className="text-xl font-semibold text-slate-900">
-                  {selectedDeal.client}
+                  {isCreating ? 'Novo cliente' : selectedDeal?.client}
                 </h2>
                 <p className="text-sm text-slate-500">
                   Edite os marcos financeiros desta oportunidade.
                 </p>
               </div>
               <button
-                onClick={() => setSelectedId(null)}
+                onClick={closeModal}
                 className="rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
               >
                 <X />
@@ -338,6 +619,32 @@ function App() {
             </div>
 
             <div className="max-h-[70vh] overflow-y-auto px-6 py-4">
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
+                <div className="md:col-span-2">
+                  <label className="text-xs text-slate-500">Nome do cliente</label>
+                  <input
+                    value={dealClientDraft}
+                    onChange={(e) => setDealClientDraft(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="Ex: Cliente Atlas"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Estágio no pipeline</label>
+                  <select
+                    value={dealStageDraft}
+                    onChange={(e) => setDealStageDraft(e.target.value as Stage)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    {columns.map((stage) => (
+                      <option key={stage} value={stage}>
+                        {stageLabels[stage]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                 <div className="flex items-center gap-2 text-sm text-slate-600">
                   <Wallet2 size={16} />
@@ -401,20 +708,33 @@ function App() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-slate-100 px-6 py-4">
-              <button
-                onClick={() => setSelectedId(null)}
-                className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={savePayments}
-                className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
-              >
-                <CalendarDays size={16} />
-                Salvar cronograma
-              </button>
+            <div className="flex justify-between gap-2 border-t border-slate-100 px-6 py-4">
+              <div className="flex items-center gap-2">
+                {!isCreating && selectedDeal && (
+                  <button
+                    onClick={deleteDeal}
+                    className="rounded-lg px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                  >
+                    Excluir cliente
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={closeModal}
+                  className="rounded-lg px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={saveDealAndPayments}
+                  disabled={isSavingDeal}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <CalendarDays size={16} />
+                  {isSavingDeal ? 'Salvando...' : 'Salvar'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
