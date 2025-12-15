@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Plus, Trash2, Wallet2, X } from 'lucide-react'
+import { CalendarDays, Info, Plus, Trash2, X } from 'lucide-react'
 import { format, parseISO, startOfMonth } from 'date-fns'
+import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 
 type Payment = {
   id: number
@@ -61,8 +62,18 @@ function App() {
   const [semesterFilter, setSemesterFilter] = useState<'1' | '2'>('1')
 
   const [isSavingDeal, setIsSavingDeal] = useState(false)
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  )
 
   const selectedDeal = deals.find((deal) => deal.id === selectedId) ?? null
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
+
+  const showToast = (type: 'success' | 'error', message: string) => {
+    setToast({ type, message })
+    window.setTimeout(() => setToast(null), 3000)
+  }
 
   useEffect(() => {
     const fetchDeals = async () => {
@@ -90,7 +101,9 @@ function App() {
         )
       } catch (e) {
         console.error(e)
-        setError('Não foi possível carregar os clientes. Verifique se a API está rodando.')
+        const msg = 'Não foi possível carregar os clientes. Verifique se a API está rodando.'
+        setError(msg)
+        showToast('error', msg)
       } finally {
         setLoading(false)
       }
@@ -205,9 +218,10 @@ function App() {
       }
       await reloadDeals()
       closeModal()
+      showToast('success', isCreating ? 'Cliente criado com sucesso.' : 'Cliente atualizado.')
     } catch (e) {
       console.error(e)
-      alert('Erro ao salvar o cliente. Verifique a API.')
+      showToast('error', 'Erro ao salvar o cliente. Verifique a API.')
     } finally {
       setIsSavingDeal(false)
     }
@@ -229,9 +243,10 @@ function App() {
       })
       await reloadDeals()
       closeModal()
+      showToast('success', 'Cliente excluído com sucesso.')
     } catch (e) {
       console.error(e)
-      alert('Erro ao excluir o cliente.')
+      showToast('error', 'Erro ao excluir o cliente.')
     }
   }
 
@@ -318,6 +333,50 @@ function App() {
   const dealTotal = (deal: Deal) =>
     deal.payments.reduce((sum, payment) => sum + payment.amount, 0)
 
+  const totalsForPeriod = useMemo(
+    () =>
+      filteredForecast.reduce(
+        (acc, m) => {
+          acc.closed += m.closed
+          acc.open += m.open
+          return acc
+        },
+        { closed: 0, open: 0 },
+      ),
+    [filteredForecast],
+  )
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event
+    if (!over) return
+
+    const dealId = Number(active.id)
+    const targetStage = over.id as Stage
+    if (Number.isNaN(dealId)) return
+
+    const current = deals.find((d) => d.id === dealId)
+    if (!current || current.stage === targetStage) return
+
+    // Otimismo: atualiza local antes da API
+    setDeals((prev) =>
+      prev.map((d) => (d.id === dealId ? { ...d, stage: targetStage } : d)),
+    )
+
+    try {
+      await fetch(`${API_URL}/deals/${dealId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: targetStage }),
+      })
+      showToast('success', `Cliente movido para ${stageLabels[targetStage]}.`)
+    } catch (e) {
+      console.error(e)
+      showToast('error', 'Erro ao mover cliente. A coluna pode não ter sido atualizada.')
+      // rollback simples
+      reloadDeals()
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 pb-12">
       <header className="border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -325,16 +384,13 @@ function App() {
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400">CRM</p>
             <h1 className="text-2xl font-semibold text-slate-900">
-              CRM Consultivo com Work Packages
+              CRM HAI
             </h1>
             <p className="text-sm text-slate-500">
               Pagamentos por marcos, previsão mensal e pipeline Kanban.
             </p>
           </div>
-          <div className="flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-600">
-            <Wallet2 size={16} />
-            Work Packages
-          </div>
+          <div />
         </div>
       </header>
 
@@ -374,52 +430,83 @@ function App() {
               <span className="text-xs text-rose-600">{error}</span>
             )}
           </div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {columns.map((column) => (
-              <div
-                key={column}
-                className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
-              >
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-slate-800">
-                    {stageLabels[column]}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {
-                      deals.filter((deal) => deal.stage === column)
-                        .length
-                    }{' '}
-                    deals
-                  </span>
-                </div>
-                <div className="space-y-3">
-                  {deals
-                    .filter((deal) => deal.stage === column)
-                    .map((deal) => (
-                      <button
-                        key={deal.id}
-                        onClick={() => setSelectedId(deal.id)}
-                        className="w-full rounded-lg border border-slate-100 bg-slate-50/70 p-3 text-left transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm"
-                      >
-                        <p className="text-sm font-semibold text-slate-900">{deal.client}</p>
-                        <p className="text-xs text-slate-500">Total contrato</p>
-                        <p className="text-sm font-bold text-slate-900">{currency(dealTotal(deal))}</p>
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {deal.payments.map((p) => (
-                            <span
-                              key={p.id}
-                              className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700"
-                            >
-                              {p.label}
-                            </span>
-                          ))}
+          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {columns.map((column) => (
+                <div
+                  key={column}
+                  id={column}
+                  className="rounded-xl border border-slate-200 bg-white/90 p-3 shadow-sm"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-slate-800">
+                      {stageLabels[column]}
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      {
+                        deals.filter((deal) => deal.stage === column)
+                          .length
+                      }{' '}
+                      deals
+                    </span>
+                  </div>
+                  <div className="space-y-3">
+                    {deals
+                      .filter((deal) => deal.stage === column)
+                      .map((deal) => (
+                        <div
+                          key={deal.id}
+                          id={String(deal.id)}
+                          data-deal-id={deal.id}
+                          data-stage={column}
+                          className="cursor-grab active:cursor-grabbing"
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData('text/plain', String(deal.id))
+                          }}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault()
+                            const idStr = e.dataTransfer.getData('text/plain')
+                            const dealId = Number(idStr)
+                            if (!Number.isNaN(dealId) && deal.stage !== column) {
+                              handleDragEnd({
+                                active: { id: dealId } as any,
+                                over: { id: column } as any,
+                              })
+                            }
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(deal.id)}
+                            className="w-full rounded-lg border border-slate-100 bg-slate-50/70 p-3 text-left transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm"
+                          >
+                            <p className="text-sm font-semibold text-slate-900">
+                              {deal.client}
+                            </p>
+                            <p className="text-xs text-slate-500">Total contrato</p>
+                            <p className="text-sm font-bold text-slate-900">
+                              {currency(dealTotal(deal))}
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {deal.payments.map((p) => (
+                                <span
+                                  key={p.id}
+                                  className="rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] text-indigo-700"
+                                >
+                                  {p.label}
+                                </span>
+                              ))}
+                            </div>
+                          </button>
                         </div>
-                      </button>
-                    ))}
+                      ))}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </DndContext>
         </section>
 
         <section className="lg:col-span-2">
@@ -535,6 +622,17 @@ function App() {
             )}
           </div>
 
+          <div className="mb-2 flex items-center gap-3 text-xs text-slate-600">
+            <div className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
+              <span className="font-semibold">Total fechado no período:</span>
+              <span className="font-bold">{currency(totalsForPeriod.closed)}</span>
+            </div>
+            <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-3 py-1 text-amber-800">
+              <span className="font-semibold">Total em proposta:</span>
+              <span className="font-bold">{currency(totalsForPeriod.open)}</span>
+            </div>
+          </div>
+
           <div className="space-y-3">
             {filteredForecast.map((month) => (
               <div
@@ -579,7 +677,7 @@ function App() {
                       </div>
                       <span
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                          item.stage === 'Fechado'
+                          item.stage === 'FECHADO'
                             ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
                             : 'border border-dashed border-amber-300 bg-amber-50 text-amber-800'
                         }`}
@@ -601,7 +699,7 @@ function App() {
             <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                  Work Packages
+                  Detalhes do cliente
                 </p>
                 <h2 className="text-xl font-semibold text-slate-900">
                   {isCreating ? 'Novo cliente' : selectedDeal?.client}
@@ -737,6 +835,32 @@ function App() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-4 right-4 z-50 flex max-w-xs items-start gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+          <div
+            className={`mt-0.5 h-2 w-2 rounded-full ${
+              toast.type === 'success' ? 'bg-emerald-500' : 'bg-rose-500'
+            }`}
+          />
+          <div className="flex-1 space-y-1">
+            <div className="flex items-center gap-1">
+              <Info size={12} className="text-slate-500" />
+              <span className="font-semibold text-slate-800">
+                {toast.type === 'success' ? 'Tudo certo' : 'Algo deu errado'}
+              </span>
+            </div>
+            <p className="text-slate-600">{toast.message}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
     </div>
