@@ -5,7 +5,7 @@
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
 generator client {
-  provider = "prisma-client"
+  provider = "prisma-client-js"
   output   = "../generated/prisma"
 }
 
@@ -34,7 +34,7 @@ model Payment {
   id        Int      @id @default(autoincrement())
   label     String
   date      DateTime
-  amount    Decimal  @db.Numeric(12, 2)
+  amount    Decimal  @db.Decimal(12, 2)
   dealId    Int
   deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
