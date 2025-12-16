@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Info, Plus, Trash2, X } from 'lucide-react'
+import { CalendarDays, Info, Plus, Trash2, X, Wallet2 } from 'lucide-react'
 import { format, parseISO, startOfMonth } from 'date-fns'
-import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
+import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core'
 
 type Payment = {
   id: number
