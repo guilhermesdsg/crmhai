@@ -14,8 +14,14 @@ type Deal = {
   id: number
   client: string
   stage: Stage
+  industry?: string | null
+  dealSize?: DealSize | null
+  nextStep?: string | null
+  decisionMaker?: string | null
   payments: Payment[]
 }
+
+type DealSize = 'SMALL' | 'MID' | 'ENTERPRISE'
 
 type Stage = 'PROSPECCAO' | 'CONVERSA' | 'PROPOSTA' | 'FECHADO'
 
@@ -42,6 +48,7 @@ type MonthEntry = {
 }
 
 type ForecastViewMode = 'custom' | 'semester' | 'year'
+type ForecastValueMode = 'gross' | 'expected'
 
 const API_URL = 'http://localhost:4000'
 
@@ -52,10 +59,15 @@ function App() {
   const [paymentsDraft, setPaymentsDraft] = useState<Payment[]>([])
   const [dealClientDraft, setDealClientDraft] = useState('')
   const [dealStageDraft, setDealStageDraft] = useState<Stage>('PROSPECCAO')
+  const [dealIndustryDraft, setDealIndustryDraft] = useState('')
+  const [dealSizeDraft, setDealSizeDraft] = useState<DealSize>('MID')
+  const [dealNextStepDraft, setDealNextStepDraft] = useState('')
+  const [dealDecisionMakerDraft, setDealDecisionMakerDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const [forecastMode, setForecastMode] = useState<ForecastViewMode>('custom')
+  const [forecastValueMode, setForecastValueMode] = useState<ForecastValueMode>('gross')
   const [customFrom, setCustomFrom] = useState<string>('')
   const [customTo, setCustomTo] = useState<string>('')
   const [yearFilter, setYearFilter] = useState<number>(new Date().getFullYear())
@@ -84,12 +96,7 @@ function App() {
         if (!res.ok) {
           throw new Error('Erro ao carregar clientes')
         }
-        const data: Array<{
-          id: number
-          client: string
-          stage: Stage
-          payments: { id: number; label: string; date: string; amount: number }[]
-        }> = await res.json()
+        const data: Deal[] = await res.json()
         setDeals(
           data.map((deal) => ({
             ...deal,
@@ -117,10 +124,18 @@ function App() {
       setPaymentsDraft(selectedDeal.payments.map((p) => ({ ...p })))
       setDealClientDraft(selectedDeal.client)
       setDealStageDraft(selectedDeal.stage)
+      setDealIndustryDraft(selectedDeal.industry ?? '')
+      setDealSizeDraft(selectedDeal.dealSize ?? 'MID')
+      setDealNextStepDraft(selectedDeal.nextStep ?? '')
+      setDealDecisionMakerDraft(selectedDeal.decisionMaker ?? '')
     } else if (isCreating) {
       setPaymentsDraft([])
       setDealClientDraft('')
       setDealStageDraft('PROSPECCAO')
+      setDealIndustryDraft('')
+      setDealSizeDraft('MID')
+      setDealNextStepDraft('')
+      setDealDecisionMakerDraft('')
     }
   }, [selectedDeal, isCreating])
 
@@ -187,6 +202,10 @@ function App() {
           body: JSON.stringify({
             client: dealClientDraft.trim(),
             stage: dealStageDraft,
+            industry: dealIndustryDraft.trim() || undefined,
+            dealSize: dealSizeDraft,
+            nextStep: dealNextStepDraft.trim() || undefined,
+            decisionMaker: dealDecisionMakerDraft.trim() || undefined,
             payments: paymentsDraft.map((p) => ({
               label: p.label,
               date: p.date,
@@ -201,6 +220,10 @@ function App() {
           body: JSON.stringify({
             client: dealClientDraft.trim(),
             stage: dealStageDraft,
+            industry: dealIndustryDraft.trim() || undefined,
+            dealSize: dealSizeDraft,
+            nextStep: dealNextStepDraft.trim() || undefined,
+            decisionMaker: dealDecisionMakerDraft.trim() || undefined,
           }),
         })
 
@@ -285,6 +308,13 @@ function App() {
     return Array.from(months.values()).sort((a, b) => (a.key < b.key ? -1 : 1))
   }, [deals])
 
+const stageProbability: Record<Stage, number> = {
+  PROSPECCAO: 0.1,
+  CONVERSA: 0.3,
+  PROPOSTA: 0.6,
+  FECHADO: 1,
+}
+
   const forecastYears = useMemo(
     () =>
       Array.from(new Set(forecast.map((m) => m.key.slice(0, 4))))
@@ -334,16 +364,35 @@ function App() {
     deal.payments.reduce((sum, payment) => sum + payment.amount, 0)
 
   const totalsForPeriod = useMemo(
-    () =>
-      filteredForecast.reduce(
+    () => {
+      const raw = filteredForecast.reduce(
         (acc, m) => {
           acc.closed += m.closed
           acc.open += m.open
           return acc
         },
         { closed: 0, open: 0 },
-      ),
-    [filteredForecast],
+      )
+
+      if (forecastValueMode === 'gross') return raw
+
+      // expected: aplica probabilidade por estágio em cada item
+      return filteredForecast.reduce(
+        (acc, m) => {
+          m.items.forEach((item) => {
+            const prob = stageProbability[item.stage]
+            if (item.stage === 'FECHADO') {
+              acc.closed += item.amount * prob
+            } else {
+              acc.open += item.amount * prob
+            }
+          })
+          return acc
+        },
+        { closed: 0, open: 0 },
+      )
+    },
+    [filteredForecast, forecastValueMode],
   )
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -480,15 +529,55 @@ function App() {
                           <button
                             type="button"
                             onClick={() => setSelectedId(deal.id)}
-                            className="w-full rounded-lg border border-slate-100 bg-slate-50/70 p-3 text-left transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm"
+                            className={`w-full rounded-lg border p-3 text-left transition hover:-translate-y-0.5 hover:bg-white hover:shadow-sm ${
+                              deal.stage !== 'FECHADO' &&
+                              deal.payments.some((p) => {
+                                const today = new Date()
+                                const date = parseISO(p.date)
+                                const diff =
+                                  (date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+                                return diff >= 0 && diff <= 15
+                              })
+                                ? 'border-amber-300 bg-amber-50/60'
+                                : 'border-slate-100 bg-slate-50/70'
+                            }`}
                           >
-                            <p className="text-sm font-semibold text-slate-900">
-                              {deal.client}
-                            </p>
-                            <p className="text-xs text-slate-500">Total contrato</p>
-                            <p className="text-sm font-bold text-slate-900">
-                              {currency(dealTotal(deal))}
-                            </p>
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="space-y-0.5">
+                                <p className="text-sm font-semibold text-slate-900">
+                                  {deal.client}
+                                </p>
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {deal.industry && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
+                                      {deal.industry}
+                                    </span>
+                                  )}
+                                  {deal.dealSize && (
+                                    <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-50">
+                                      {deal.dealSize === 'SMALL'
+                                        ? 'Small'
+                                        : deal.dealSize === 'MID'
+                                          ? 'Mid'
+                                          : 'Enterprise'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-[11px] uppercase tracking-wide text-slate-400">
+                                  Total
+                                </p>
+                                <p className="text-sm font-bold text-slate-900">
+                                  {currency(dealTotal(deal))}
+                                </p>
+                              </div>
+                            </div>
+                            {deal.nextStep && (
+                              <p className="mt-1 line-clamp-2 text-[11px] text-slate-500">
+                                Próx. passo: {deal.nextStep}
+                              </p>
+                            )}
                             <div className="mt-2 flex flex-wrap gap-1">
                               {deal.payments.map((p) => (
                                 <span
@@ -620,6 +709,32 @@ function App() {
                 </select>
               </div>
             )}
+
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-[11px] text-slate-500">Valor:</span>
+              <div className="flex gap-1 rounded-full bg-slate-100 p-1 text-[11px]">
+                <button
+                  onClick={() => setForecastValueMode('gross')}
+                  className={`rounded-full px-3 py-1 ${
+                    forecastValueMode === 'gross'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-700'
+                  }`}
+                >
+                  Bruto
+                </button>
+                <button
+                  onClick={() => setForecastValueMode('expected')}
+                  className={`rounded-full px-3 py-1 ${
+                    forecastValueMode === 'expected'
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-700'
+                  }`}
+                >
+                  Esperado
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="mb-2 flex items-center gap-3 text-xs text-slate-600">
@@ -656,11 +771,33 @@ function App() {
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2">
                     <p className="text-xs uppercase tracking-wide text-emerald-700">Fechado</p>
-                    <p className="text-xl font-semibold text-emerald-900">{currency(month.closed)}</p>
+                    <p className="text-xl font-semibold text-emerald-900">
+                      {currency(
+                        forecastValueMode === 'gross'
+                          ? month.closed
+                          : month.items
+                              .filter((i) => i.stage === 'FECHADO')
+                              .reduce(
+                                (sum, i) => sum + i.amount * stageProbability[i.stage],
+                                0,
+                              ),
+                      )}
+                    </p>
                   </div>
                   <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50 px-3 py-2">
                     <p className="text-xs uppercase tracking-wide text-amber-700">Proposta</p>
-                    <p className="text-xl font-semibold text-amber-900">{currency(month.open)}</p>
+                    <p className="text-xl font-semibold text-amber-900">
+                      {currency(
+                        forecastValueMode === 'gross'
+                          ? month.open
+                          : month.items
+                              .filter((i) => i.stage !== 'FECHADO')
+                              .reduce(
+                                (sum, i) => sum + i.amount * stageProbability[i.stage],
+                                0,
+                              ),
+                      )}
+                    </p>
                   </div>
                 </div>
                 <div className="mt-3 space-y-2">
@@ -741,6 +878,50 @@ function App() {
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div className="mb-4 grid gap-3 md:grid-cols-3">
+                <div>
+                  <label className="text-xs text-slate-500">Setor / Indústria</label>
+                  <input
+                    value={dealIndustryDraft}
+                    onChange={(e) => setDealIndustryDraft(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="Ex: SaaS, Manufatura"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Tamanho do deal</label>
+                  <select
+                    value={dealSizeDraft}
+                    onChange={(e) => setDealSizeDraft(e.target.value as DealSize)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="SMALL">Small</option>
+                    <option value="MID">Mid</option>
+                    <option value="ENTERPRISE">Enterprise</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500">Decisor principal</label>
+                  <input
+                    value={dealDecisionMakerDraft}
+                    onChange={(e) => setDealDecisionMakerDraft(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="Ex: Diretora de Operações"
+                  />
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <label className="text-xs text-slate-500">Próximo passo combinado</label>
+                <textarea
+                  value={dealNextStepDraft}
+                  onChange={(e) => setDealNextStepDraft(e.target.value)}
+                  rows={2}
+                  className="mt-1 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-0 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="Ex: Enviar proposta revisada até sexta e agendar call com o decisor."
+                />
               </div>
 
               <div className="flex items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">

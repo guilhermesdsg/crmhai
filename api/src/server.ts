@@ -12,18 +12,28 @@ const stageEnum = ['PROSPECCAO', 'CONVERSA', 'PROPOSTA', 'FECHADO'] as const
 const paymentSchema = z.object({
   label: z.string().min(1),
   date: z.coerce.date(),
-  amount: z.coerce.number(),
+  amount: z.coerce.number().nonnegative(),
 })
 
+const dealSizeEnum = ['SMALL', 'MID', 'ENTERPRISE'] as const
+
 const dealSchema = z.object({
-  client: z.string().min(1),
+  client: z.string().min(1).transform((v) => v.trim()),
   stage: z.enum(stageEnum).optional(),
+  industry: z.string().min(1).transform((v) => v.trim()).optional(),
+  dealSize: z.enum(dealSizeEnum).optional(),
+  nextStep: z.string().min(1).transform((v) => v.trim()).optional(),
+  decisionMaker: z.string().min(1).transform((v) => v.trim()).optional(),
   payments: z.array(paymentSchema).optional(),
 })
 
 const dealUpdateSchema = z.object({
-  client: z.string().min(1).optional(),
+  client: z.string().min(1).transform((v) => v.trim()).optional(),
   stage: z.enum(stageEnum).optional(),
+  industry: z.string().min(1).transform((v) => v.trim()).optional(),
+  dealSize: z.enum(dealSizeEnum).optional(),
+  nextStep: z.string().min(1).transform((v) => v.trim()).optional(),
+  decisionMaker: z.string().min(1).transform((v) => v.trim()).optional(),
 })
 
 const paymentUpdateSchema = z.object({
@@ -59,12 +69,24 @@ app.post('/deals', async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.flatten() })
   }
-  const { client, stage = 'PROSPECCAO', payments = [] } = parsed.data
+  const {
+    client,
+    stage = 'PROSPECCAO',
+    industry,
+    dealSize,
+    nextStep,
+    decisionMaker,
+    payments = [],
+  } = parsed.data
 
   const created = await prisma.deal.create({
     data: {
       client,
       stage,
+      industry,
+      dealSize,
+      nextStep,
+      decisionMaker,
       payments: {
         create: payments.map((p) => ({
           label: p.label,

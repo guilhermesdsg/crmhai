@@ -21,13 +21,23 @@ enum Stage {
   FECHADO
 }
 
+enum DealSize {
+  SMALL
+  MID
+  ENTERPRISE
+}
+
 model Deal {
-  id         Int       @id @default(autoincrement())
-  client     String
-  stage      Stage     @default(PROSPECCAO)
-  payments   Payment[]
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id           Int       @id @default(autoincrement())
+  client       String
+  stage        Stage     @default(PROSPECCAO)
+  industry     String?
+  dealSize     DealSize? @default(MID)
+  nextStep     String?
+  decisionMaker String?
+  payments     Payment[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model Payment {
