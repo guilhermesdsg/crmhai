@@ -28,25 +28,42 @@ enum DealSize {
 }
 
 model Deal {
-  id           Int       @id @default(autoincrement())
-  client       String
-  stage        Stage     @default(PROSPECCAO)
-  industry     String?
-  dealSize     DealSize? @default(MID)
-  nextStep     String?
+  id            Int       @id @default(autoincrement())
+  client        String
+  stage         Stage     @default(PROSPECCAO)
+  industry      String?
+  dealSize      DealSize? @default(MID)
+  dealType      String?   // "CONSULTORIA", "PD", "SAAS"
+  probability   Int       @default(50) // 0-100
+  nextStep      String?
   decisionMaker String?
+  payments      Payment[]
+  purchaseOrders PurchaseOrder[]
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model PurchaseOrder {
+  id           Int       @id @default(autoincrement())
+  number       String
+  type         String    // "NF" or "Invoice"
+  paymentTerms Int       @default(30) // days
+  dealId       Int
+  deal         Deal      @relation(fields: [dealId], references: [id], onDelete: Cascade)
   payments     Payment[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 }
 
 model Payment {
-  id        Int      @id @default(autoincrement())
-  label     String
-  date      DateTime
-  amount    Decimal  @db.Decimal(12, 2)
-  dealId    Int
-  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              Int            @id @default(autoincrement())
+  label           String
+  date            DateTime
+  amount          Decimal        @db.Decimal(12, 2)
+  dealId          Int
+  deal            Deal           @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  purchaseOrderId Int?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
